@@ -236,6 +236,32 @@ class BlinkAuthService {
         }
     }
 
+    async createWorkspaceApiKey(workspaceId, name) {
+        this.logger.info(`Creating API Key "${name}" in workspace ${workspaceId}...`);
+        try {
+            const payload = {
+                workspaceId: workspaceId,
+                name: name
+            };
+            
+            const response = await this.httpClient.post(`${this.baseUrl}/api/workspace/api-keys`, payload, {
+                headers: {
+                    'Authorization': `Bearer ${this.idToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.data && response.data.key_value) {
+                this.logger.success(`✅ API Key created successfully: ${response.data.key_value.substring(0, 15)}...`);
+                return response.data.key_value;
+            }
+            throw new Error(`Failed to create API key: ${JSON.stringify(response.data)}`);
+        } catch (error) {
+            this.logger.error('Error creating API key', error);
+            return null;
+        }
+    }
+
     async getAgentHealth(agentId) {
         this.logger.info(`Checking health for agent ${agentId}...`);
         try {

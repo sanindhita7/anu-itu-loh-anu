@@ -35,7 +35,8 @@ async function showMenu() {
             name: 'mode',
             message: chalk.bold.magenta('Select operation mode:'),
             choices: [
-                { name: ` ${chalk.green('▶')} Register New Accounts`, value: 'register' },
+                { name: ` ${chalk.green('🚀')} Register + Get API Key (Fast)`, value: 'api-only' },
+                { name: ` ${chalk.cyan('🤖')} Register + Full Agent Deployment`, value: 'register' },
                 new inquirer.Separator(),
                 { name: ` ${chalk.red('✖')} Exit`, value: 'exit' }
             ]

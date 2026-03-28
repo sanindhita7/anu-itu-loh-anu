@@ -58,17 +58,17 @@ class BlinkAutoBot {
         // 6. Refresh Firebase token to reflect subscription status
         await blinkAuth.refreshFirebaseToken();
         
-        // 7. Finalize session (Migrate + Session Data + Agent + API Key)
-        const sessionInfo = await this.finalizeAccountSession(blinkAuth);
+        // 7. Finalize session (Migrate + Session Data + Agent/API Key)
+        const sessionInfo = await this.finalizeAccountSession(blinkAuth, this.config.mode);
         
-        // 7. Save success data
+        // 8. Save success data
         this.saveAccount({
             email: inbox.address,
             emailPassword: inbox.password,
             idToken: blinkAuth.idToken,
             firebaseRefreshToken: blinkAuth.firebaseRefreshToken,
             accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken, // This is the App refresh token
+            refreshToken: tokens.refreshToken,
             blinkApiKey: sessionInfo.blinkApiKey,
             plan: sessionInfo.plan,
             credits: sessionInfo.credits,
@@ -78,10 +78,10 @@ class BlinkAutoBot {
             timestamp: new Date().toISOString()
         });
         
-        this.logger.success(`Account created and paid successfully: ${email.metadata?.address || inbox.address}`);
+        this.logger.success(`Account created and success: ${email.metadata?.address || inbox.address}`);
     }
 
-    async finalizeAccountSession(blinkAuth) {
+    async finalizeAccountSession(blinkAuth, mode) {
         let blinkApiKey = null;
         
         // 1. Migrate credits (ensures Pro status is active in DB)
@@ -94,42 +94,46 @@ class BlinkAutoBot {
             this.logger.info(`Workspace: ${sessionData.workspace?.name} (${sessionData.workspace?.slug})`);
             this.logger.info(`Plan: ${sessionData.workspace?.tier} | Credits: ${sessionData.workspace?.usage?.billing_period_credits_limit}`);
             
-            // 3. Create initial agent automatically
-            const agentName = `agent-${faker.word.adjective()}-${faker.word.noun()}`.toLowerCase();
-            const agent = await blinkAuth.createAgent(sessionData.workspace.id, agentName);
-            
-            if (agent && agent.id) {
-                // 4. Wait for provisioning with retry logic (resilience against 503 errors)
-                this.logger.info(`⏳ Waiting for agent ${agent.id} to provision...`);
-                let health = null;
-                const maxRetries = 5;
+            // 3. Choice: Simple API Key Generate or Agent Deploy
+            if (mode === 'api-only') {
+                this.logger.info('🚀 Mode: API-Only (Fast Generation)');
+                const keyName = `key-${faker.string.alphanumeric(6)}`.toLowerCase();
+                blinkApiKey = await blinkAuth.createWorkspaceApiKey(sessionData.workspace.id, keyName);
+            } else {
+                this.logger.info('🤖 Mode: Full (Agent Deployment)');
+                // 3. Create initial agent automatically
+                const agentName = `agent-${faker.word.adjective()}-${faker.word.noun()}`.toLowerCase();
+                const agent = await blinkAuth.createAgent(sessionData.workspace.id, agentName);
                 
-                for (let i = 0; i < maxRetries; i++) {
-                    const waitTime = i === 0 ? 12000 : 15000; // Increased base wait and retry wait
-                    this.logger.info(`Wait attempt ${i + 1}/${maxRetries} (${waitTime/1000}s)...`);
-                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                if (agent && agent.id) {
+                    // 4. Wait for provisioning
+                    this.logger.info(`⏳ Waiting for agent ${agent.id} to provision...`);
+                    let health = null;
+                    const maxRetries = 5;
                     
-                    health = await blinkAuth.getAgentHealth(agent.id);
+                    for (let i = 0; i < maxRetries; i++) {
+                        const waitTime = i === 0 ? 12000 : 15000;
+                        this.logger.info(`Wait attempt ${i + 1}/${maxRetries} (${waitTime/1000}s)...`);
+                        await new Promise(resolve => setTimeout(resolve, waitTime));
+                        
+                        health = await blinkAuth.getAgentHealth(agent.id);
+                        if (health && health.healthy) {
+                            this.logger.info(`🤖 Agent Health: ✅ Healthy | State: ${health.machineState}`);
+                            break;
+                        } else if (health) {
+                            this.logger.warn(`🤖 Agent State: ${health.machineState || 'unknown'} - Retrying...`);
+                        }
+                    }
+                    
                     if (health && health.healthy) {
-                        this.logger.info(`🤖 Agent Health: ✅ Healthy | State: ${health.machineState}`);
-                        break;
-                    } else if (health) {
-                        this.logger.warn(`🤖 Agent State: ${health.machineState || 'unknown'} - Retrying...`);
-                    } else {
-                        this.logger.error(`🤖 Agent Health check failed (possibly 503/Timeout) - Retrying...`);
+                        // 5. Retrieve BLINK_API_KEY from environment
+                        this.logger.info('🔑 Retrieving BLINK_API_KEY from agent...');
+                        const cmdResult = await blinkAuth.executeCommand(agent.id, "echo $BLINK_API_KEY");
+                        if (cmdResult && cmdResult.stdout) {
+                            blinkApiKey = cmdResult.stdout.trim();
+                            this.logger.info(`✅ Key Captured: ${blinkApiKey.substring(0, 10)}...`);
+                        }
                     }
-                }
-                
-                if (health && health.healthy) {
-                    // 5. Retrieve BLINK_API_KEY from environment
-                    this.logger.info('🔑 Retrieving BLINK_API_KEY from agent...');
-                    const cmdResult = await blinkAuth.executeCommand(agent.id, "echo $BLINK_API_KEY");
-                    if (cmdResult && cmdResult.stdout) {
-                        blinkApiKey = cmdResult.stdout.trim();
-                        this.logger.info(`✅ Key Captured: ${blinkApiKey.substring(0, 10)}...`);
-                    }
-                } else {
-                    this.logger.error('❌ Agent failed to reach healthy state in time.');
                 }
             }
         }
